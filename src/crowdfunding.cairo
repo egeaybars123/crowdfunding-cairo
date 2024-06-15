@@ -7,6 +7,7 @@ struct Campaign {
     goal: u256,
     amount: u256,
     numFunders: u64,
+    end_time: u64,
 }
 
 #[derive(Copy, Drop, Serde, starknet::Store)]
@@ -25,6 +26,7 @@ trait ICrowdfunding<TContractState> {
     );
     fn contribute(ref self: TContractState, campaign_no: u64, amount: u256);
     fn withdraw_funds(ref self: TContractState, campaign_no: u64);
+    fn withdraw_contribution(ref self: TContractState, campaign_no: u64);
     fn get_funder_identifier(
         self: @TContractState, campaign_no: u64, funder_addr: ContractAddress
     ) -> felt252;
@@ -33,6 +35,7 @@ trait ICrowdfunding<TContractState> {
 
 trait IERC20DispatcherTrait<T> {
     fn transfer_from(self: T, sender: ContractAddress, recipient: ContractAddress, amount: u256);
+    fn transfer(self: T, recipient: ContractAddress, amount: u256);
 }
 
 #[derive(Copy, Drop, Serde, starknet::Store)]
@@ -45,13 +48,17 @@ impl IERC20DispatcherImpl of IERC20DispatcherTrait<IERC20Dispatcher> {
         self: IERC20Dispatcher, sender: ContractAddress, recipient: ContractAddress, amount: u256
     ) { // starknet::call_contract_syscall is called in here 
     }
+    fn transfer(
+        self: IERC20Dispatcher, recipient: ContractAddress, amount: u256
+    ) { // starknet::call_contract_syscall is called in here 
+    }
 }
 
 #[starknet::contract]
 mod Crowdfunding {
     use crowdfunding::crowdfunding::ICrowdfunding;
     use super::{Campaign, Funder, IERC20Dispatcher, IERC20DispatcherTrait};
-    use starknet::{ContractAddress, get_caller_address, get_contract_address};
+    use starknet::{ContractAddress, get_caller_address, get_contract_address, get_block_timestamp};
     use core::poseidon::{PoseidonTrait, poseidon_hash_span};
     use core::hash::{HashStateTrait, HashStateExTrait};
     use core::traits::{Into};
@@ -73,12 +80,15 @@ mod Crowdfunding {
         ) {
             let new_campaign_no: u64 = self.campaign_no.read() + 1;
             self.campaign_no.write(new_campaign_no);
+
+            //1 month = 2629800 seconds 
             let new_campaign: Campaign = Campaign {
                 beneficiary: _beneficiary,
                 token_addr: _token_addr,
                 goal: _goal,
                 amount: 0,
-                numFunders: 0
+                numFunders: 0,
+                end_time: get_block_timestamp() + 2629800
             };
 
             self.campaigns.write(new_campaign_no, new_campaign);
@@ -86,6 +96,8 @@ mod Crowdfunding {
 
         fn contribute(ref self: ContractState, campaign_no: u64, amount: u256) {
             let mut campaign = self.campaigns.read(campaign_no);
+            assert(get_block_timestamp() < campaign.end_time, 'Campaign ended');
+
             campaign.amount += amount;
             campaign.numFunders += 1;
 
@@ -104,8 +116,28 @@ mod Crowdfunding {
         fn withdraw_funds(ref self: ContractState, campaign_no: u64) {
             let campaign = self.campaigns.read(campaign_no);
             let caller = get_caller_address();
+
             assert(caller == campaign.beneficiary, 'Not the beneficiary');
             assert(campaign.amount >= campaign.goal, 'Goal not reached');
+            assert(get_block_timestamp() > campaign.end_time, 'Campaign ended');
+
+            IERC20Dispatcher { contract_address: campaign.token_addr }
+                .transfer(campaign.beneficiary, campaign.amount);
+        }
+
+        //Can only be called if the campaign ended and could not reach the goal
+        fn withdraw_contribution(ref self: ContractState, campaign_no: u64) {
+            let campaign = self.campaigns.read(campaign_no);
+            let funder_identifier = self.get_funder_identifier(campaign_no, get_caller_address());
+            let contribution_amount = self.get_funder_contribution(funder_identifier);
+
+            assert(get_block_timestamp() > campaign.end_time, 'Campaign not ended');
+            assert(campaign.amount < campaign.goal, 'Campaign reached goal');
+            assert(contribution_amount > 0, 'Not a funder');
+
+            let mut funder = self.funder_no.read(funder_identifier);
+            funder.amount_funded = 0;
+            self.funder_no.write(funder_identifier, funder);
         }
 
         fn get_funder_identifier(
