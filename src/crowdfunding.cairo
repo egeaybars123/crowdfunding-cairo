@@ -6,7 +6,13 @@ struct Campaign {
     token_addr: ContractAddress,
     goal: u256,
     amount: u256,
-    numFunders: u64
+    numFunders: u64,
+}
+
+#[derive(Copy, Drop, Serde, starknet::Store)]
+struct Funder {
+    funder_addr: ContractAddress,
+    amount_funded: u256
 }
 
 #[starknet::interface]
@@ -18,7 +24,10 @@ trait ICrowdfunding<TContractState> {
         _goal: u256
     );
     fn contribute(ref self: TContractState, campaign_no: u64, amount: u256);
-    fn get_campaign_identifier(self: @TContractState, campaign_no: u64) -> felt252;
+    fn get_funder_identifier(
+        self: @TContractState, campaign_no: u64, funder_addr: ContractAddress
+    ) -> felt252;
+    fn get_funder_contribution(self: @TContractState, identifier_hash: felt252) -> u256;
 }
 
 trait IERC20DispatcherTrait<T> {
@@ -39,7 +48,8 @@ impl IERC20DispatcherImpl of IERC20DispatcherTrait<IERC20Dispatcher> {
 
 #[starknet::contract]
 mod Crowdfunding {
-    use super::{Campaign, IERC20Dispatcher, IERC20DispatcherTrait};
+    use crowdfunding::crowdfunding::ICrowdfunding;
+    use super::{Campaign, Funder, IERC20Dispatcher, IERC20DispatcherTrait};
     use starknet::{ContractAddress, get_caller_address, get_contract_address};
     use core::poseidon::{PoseidonTrait, poseidon_hash_span};
     use core::hash::{HashStateTrait, HashStateExTrait};
@@ -50,12 +60,6 @@ mod Crowdfunding {
         campaign_no: u64,
         campaigns: LegacyMap<u64, Campaign>,
         funder_no: LegacyMap<felt252, Funder>,
-    }
-
-    #[derive(Copy, Drop, Serde, starknet::Store)]
-    struct Funder {
-        funder_addr: ContractAddress,
-        amount_funded: u64
     }
 
     #[abi(embed_v0)]
@@ -83,18 +87,34 @@ mod Crowdfunding {
             let mut campaign = self.campaigns.read(campaign_no);
             campaign.amount += amount;
             campaign.numFunders += 1;
+
+            let funder_addr = get_caller_address();
+            let funder_identifier: felt252 = self.get_funder_identifier(campaign_no, funder_addr);
+            let new_funder_amount = amount + self.get_funder_contribution(funder_identifier);
+            let funder = Funder { funder_addr: funder_addr, amount_funded: new_funder_amount };
+            self.funder_no.write(funder_identifier, funder);
+
             IERC20Dispatcher { contract_address: campaign.token_addr }
-                .transfer_from(get_caller_address(), get_contract_address(), amount);
+                .transfer_from(funder_addr, get_contract_address(), amount);
         }
 
-        fn get_campaign_identifier(self: @ContractState, campaign_no: u64) -> felt252 {
+        fn get_funder_identifier(
+            self: @ContractState, campaign_no: u64, funder_addr: ContractAddress
+        ) -> felt252 {
             let campaign: Campaign = self.campaigns.read(campaign_no);
             let hash_identifier = PoseidonTrait::new()
                 .update(campaign_no.into())
                 .update(campaign.beneficiary.into())
+                .update(funder_addr.into())
                 .finalize();
 
             hash_identifier
+        }
+
+        fn get_funder_contribution(self: @ContractState, identifier_hash: felt252) -> u256 {
+            let funder = self.funder_no.read(identifier_hash);
+
+            funder.amount_funded
         }
     }
 }
