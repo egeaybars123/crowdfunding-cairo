@@ -24,6 +24,7 @@ trait ICrowdfunding<TContractState> {
         _goal: u256
     );
     fn contribute(ref self: TContractState, campaign_no: u64, amount: u256);
+    fn withdraw_funds(ref self: TContractState, campaign_no: u64);
     fn get_funder_identifier(
         self: @TContractState, campaign_no: u64, funder_addr: ContractAddress
     ) -> felt252;
@@ -92,10 +93,19 @@ mod Crowdfunding {
             let funder_identifier: felt252 = self.get_funder_identifier(campaign_no, funder_addr);
             let new_funder_amount = amount + self.get_funder_contribution(funder_identifier);
             let funder = Funder { funder_addr: funder_addr, amount_funded: new_funder_amount };
+
             self.funder_no.write(funder_identifier, funder);
+            self.campaigns.write(campaign_no, campaign);
 
             IERC20Dispatcher { contract_address: campaign.token_addr }
                 .transfer_from(funder_addr, get_contract_address(), amount);
+        }
+
+        fn withdraw_funds(ref self: ContractState, campaign_no: u64) {
+            let campaign = self.campaigns.read(campaign_no);
+            let caller = get_caller_address();
+            assert(caller == campaign.beneficiary, 'Not the beneficiary');
+            assert(campaign.amount >= campaign.goal, 'Goal not reached');
         }
 
         fn get_funder_identifier(
