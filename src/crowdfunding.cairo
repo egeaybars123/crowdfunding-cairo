@@ -114,15 +114,19 @@ mod Crowdfunding {
         }
 
         fn withdraw_funds(ref self: ContractState, campaign_no: u64) {
-            let campaign = self.campaigns.read(campaign_no);
+            let mut campaign = self.campaigns.read(campaign_no);
+            let campaign_amount = campaign.amount;
             let caller = get_caller_address();
 
             assert(caller == campaign.beneficiary, 'Not the beneficiary');
             assert(campaign.amount >= campaign.goal, 'Goal not reached');
             assert(get_block_timestamp() > campaign.end_time, 'Campaign ended');
 
+            campaign.amount = 0;
+            self.campaigns.write(campaign_no, campaign);
+
             IERC20Dispatcher { contract_address: campaign.token_addr }
-                .transfer(campaign.beneficiary, campaign.amount);
+                .transfer(campaign.beneficiary, campaign_amount);
         }
 
         //Can only be called if the campaign ended and could not reach the goal
@@ -131,13 +135,18 @@ mod Crowdfunding {
             let funder_identifier = self.get_funder_identifier(campaign_no, get_caller_address());
             let contribution_amount = self.get_funder_contribution(funder_identifier);
 
+            let mut funder = self.funder_no.read(funder_identifier);
+            let amount_funded = funder.amount_funded;
+
             assert(get_block_timestamp() > campaign.end_time, 'Campaign not ended');
             assert(campaign.amount < campaign.goal, 'Campaign reached goal');
             assert(contribution_amount > 0, 'Not a funder');
 
-            let mut funder = self.funder_no.read(funder_identifier);
             funder.amount_funded = 0;
             self.funder_no.write(funder_identifier, funder);
+
+            IERC20Dispatcher { contract_address: campaign.token_addr }
+                .transfer(funder.funder_addr, amount_funded);
         }
 
         fn get_funder_identifier(
