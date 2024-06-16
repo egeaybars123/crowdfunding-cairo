@@ -2,6 +2,7 @@ use starknet::ContractAddress;
 
 #[derive(Copy, Drop, Serde, Hash, starknet::Store)]
 struct Campaign {
+    name: felt252,
     beneficiary: ContractAddress,
     token_addr: ContractAddress,
     goal: u256,
@@ -20,6 +21,7 @@ struct Funder {
 trait ICrowdfunding<TContractState> {
     fn create_campaign(
         ref self: TContractState,
+        _name: felt252,
         _beneficiary: ContractAddress,
         _token_addr: ContractAddress,
         _goal: u256
@@ -74,6 +76,7 @@ mod Crowdfunding {
     impl CrowdfundingImpl of super::ICrowdfunding<ContractState> {
         fn create_campaign(
             ref self: ContractState,
+            _name: felt252,
             _beneficiary: ContractAddress,
             _token_addr: ContractAddress,
             _goal: u256
@@ -83,6 +86,7 @@ mod Crowdfunding {
 
             //1 month = 2629800 seconds 
             let new_campaign: Campaign = Campaign {
+                name: _name,
                 beneficiary: _beneficiary,
                 token_addr: _token_addr,
                 goal: _goal,
