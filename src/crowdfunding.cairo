@@ -99,7 +99,7 @@ mod Crowdfunding {
                 goal: _goal,
                 amount: 0,
                 numFunders: 0,
-                end_time: get_block_timestamp() + 2629800
+                end_time: get_block_timestamp() + self.campaign_duration.read()
             };
 
             self.campaigns.write(new_campaign_no, new_campaign);
