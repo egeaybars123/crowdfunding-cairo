@@ -68,8 +68,14 @@ mod Crowdfunding {
     #[storage]
     struct Storage {
         campaign_no: u64,
+        campaign_duration: u64,
         campaigns: LegacyMap<u64, Campaign>,
         funder_no: LegacyMap<felt252, Funder>,
+    }
+
+    #[constructor]
+    fn constructor(ref self: ContractState, _duration: u64) {
+        self.campaign_duration.write(_duration);
     }
 
     #[abi(embed_v0)]
@@ -84,7 +90,8 @@ mod Crowdfunding {
             let new_campaign_no: u64 = self.campaign_no.read() + 1;
             self.campaign_no.write(new_campaign_no);
 
-            //1 month = 2629800 seconds 
+            //1 month = 2629800 seconds
+            // 5 minutes = 300 seconds
             let new_campaign: Campaign = Campaign {
                 name: _name,
                 beneficiary: _beneficiary,
