@@ -33,6 +33,7 @@ trait ICrowdfunding<TContractState> {
         self: @TContractState, campaign_no: u64, funder_addr: ContractAddress
     ) -> felt252;
     fn get_funder_contribution(self: @TContractState, identifier_hash: felt252) -> u256;
+    fn get_latest_campaign_no(self: @TContractState) -> u64;
 }
 
 trait IERC20DispatcherTrait<T> {
@@ -177,6 +178,10 @@ mod Crowdfunding {
             let funder = self.funder_no.read(identifier_hash);
 
             funder.amount_funded
+        }
+
+        fn get_latest_campaign_no(self: @ContractState) -> u64 {
+            self.campaign_no.read()
         }
     }
 }
