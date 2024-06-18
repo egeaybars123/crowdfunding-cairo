@@ -1,6 +1,6 @@
 use starknet::ContractAddress;
 
-#[derive(Copy, Drop, Serde, Hash, starknet::Store)]
+#[derive(Copy, Drop, Serde, starknet::Store)]
 struct Campaign {
     name: felt252,
     beneficiary: ContractAddress,
@@ -33,6 +33,10 @@ trait ICrowdfunding<TContractState> {
         self: @TContractState, campaign_no: u64, funder_addr: ContractAddress
     ) -> felt252;
     fn get_funder_contribution(self: @TContractState, identifier_hash: felt252) -> u256;
+    fn get_funder_info(
+        self: @TContractState, campaign_no: u64, funder_addr: ContractAddress
+    ) -> Funder;
+    fn get_campaign_info(self: @TContractState, campaign_no: u64) -> Campaign;
     fn get_latest_campaign_no(self: @TContractState) -> u64;
 }
 
@@ -164,20 +168,30 @@ mod Crowdfunding {
         fn get_funder_identifier(
             self: @ContractState, campaign_no: u64, funder_addr: ContractAddress
         ) -> felt252 {
-            let campaign: Campaign = self.campaigns.read(campaign_no);
-            let hash_identifier = PoseidonTrait::new()
+            let identifier_hash = PoseidonTrait::new()
                 .update(campaign_no.into())
-                .update(campaign.beneficiary.into())
                 .update(funder_addr.into())
                 .finalize();
 
-            hash_identifier
+            identifier_hash
         }
 
         fn get_funder_contribution(self: @ContractState, identifier_hash: felt252) -> u256 {
             let funder = self.funder_no.read(identifier_hash);
 
             funder.amount_funded
+        }
+
+        fn get_funder_info(
+            self: @ContractState, campaign_no: u64, funder_addr: ContractAddress
+        ) -> Funder {
+            let identifier_hash = self.get_funder_identifier(campaign_no, funder_addr);
+
+            self.funder_no.read(identifier_hash)
+        }
+
+        fn get_campaign_info(self: @ContractState, campaign_no: u64) -> Campaign {
+            self.campaigns.read(campaign_no)
         }
 
         fn get_latest_campaign_no(self: @ContractState) -> u64 {
