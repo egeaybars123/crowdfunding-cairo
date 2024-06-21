@@ -50,15 +50,11 @@ trait IERC20<T> {
 
 #[starknet::contract]
 mod Crowdfunding {
-    use crowdfunding::crowdfunding::ICrowdfunding;
     use super::{Campaign, Funder, IERC20Dispatcher, IERC20DispatcherTrait};
     use starknet::{
         ContractAddress, get_caller_address, get_contract_address, get_block_timestamp,
         contract_address_const,
     };
-    use core::poseidon::{PoseidonTrait, poseidon_hash_span};
-    use core::hash::{HashStateTrait, HashStateExTrait};
-    use core::traits::{Into};
 
     #[storage]
     struct Storage {
@@ -82,10 +78,10 @@ mod Crowdfunding {
             _token_addr: ContractAddress,
             _goal: u256
         ) {
+            assert(_beneficiary != contract_address_const::<0>(), 'Empty address');
+
             let new_campaign_no: u64 = self.campaign_no.read() + 1;
             self.campaign_no.write(new_campaign_no);
-
-            assert(_beneficiary != contract_address_const::<0>(), 'Null address');
 
             //1 month = 2629800 seconds
             //5 minutes = 300 seconds
