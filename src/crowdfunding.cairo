@@ -19,6 +19,7 @@ struct Funder {
 
 #[starknet::interface]
 trait ICrowdfunding<TContractState> {
+    //write functions
     fn create_campaign(
         ref self: TContractState,
         _name: felt252,
@@ -29,43 +30,32 @@ trait ICrowdfunding<TContractState> {
     fn contribute(ref self: TContractState, campaign_no: u64, amount: u256);
     fn withdraw_funds(ref self: TContractState, campaign_no: u64);
     fn withdraw_contribution(ref self: TContractState, campaign_no: u64);
-    fn get_funder_identifier(
-        self: @TContractState, campaign_no: u64, funder_addr: ContractAddress
-    ) -> felt252;
-    fn get_funder_contribution(self: @TContractState, identifier_hash: felt252) -> u256;
+
+    //read functions
     fn get_funder_info(
         self: @TContractState, campaign_no: u64, funder_addr: ContractAddress
     ) -> Funder;
     fn get_campaign_info(self: @TContractState, campaign_no: u64) -> Campaign;
+    fn get_campaign_duration(self: @TContractState) -> u64;
     fn get_latest_campaign_no(self: @TContractState) -> u64;
 }
 
-trait IERC20DispatcherTrait<T> {
-    fn transfer_from(self: T, sender: ContractAddress, recipient: ContractAddress, amount: u256);
-    fn transfer(self: T, recipient: ContractAddress, amount: u256);
-}
-
-#[derive(Copy, Drop, Serde, starknet::Store)]
-struct IERC20Dispatcher {
-    contract_address: ContractAddress,
-}
-
-impl IERC20DispatcherImpl of IERC20DispatcherTrait<IERC20Dispatcher> {
+#[starknet::interface]
+trait IERC20<T> {
     fn transfer_from(
-        self: IERC20Dispatcher, sender: ContractAddress, recipient: ContractAddress, amount: u256
-    ) { // starknet::call_contract_syscall is called in here 
-    }
-    fn transfer(
-        self: IERC20Dispatcher, recipient: ContractAddress, amount: u256
-    ) { // starknet::call_contract_syscall is called in here 
-    }
+        ref self: T, sender: ContractAddress, recipient: ContractAddress, amount: u256
+    );
+    fn transfer(ref self: T, recipient: ContractAddress, amount: u256);
 }
 
 #[starknet::contract]
 mod Crowdfunding {
     use crowdfunding::crowdfunding::ICrowdfunding;
     use super::{Campaign, Funder, IERC20Dispatcher, IERC20DispatcherTrait};
-    use starknet::{ContractAddress, get_caller_address, get_contract_address, get_block_timestamp};
+    use starknet::{
+        ContractAddress, get_caller_address, get_contract_address, get_block_timestamp,
+        contract_address_const,
+    };
     use core::poseidon::{PoseidonTrait, poseidon_hash_span};
     use core::hash::{HashStateTrait, HashStateExTrait};
     use core::traits::{Into};
@@ -75,7 +65,7 @@ mod Crowdfunding {
         campaign_no: u64,
         campaign_duration: u64,
         campaigns: LegacyMap<u64, Campaign>,
-        funder_no: LegacyMap<felt252, Funder>,
+        funder_contribution: LegacyMap<(u64, ContractAddress), Funder>
     }
 
     #[constructor]
@@ -95,8 +85,10 @@ mod Crowdfunding {
             let new_campaign_no: u64 = self.campaign_no.read() + 1;
             self.campaign_no.write(new_campaign_no);
 
+            assert(_beneficiary != contract_address_const::<0>(), 'Null address');
+
             //1 month = 2629800 seconds
-            // 5 minutes = 300 seconds
+            //5 minutes = 300 seconds
             let new_campaign: Campaign = Campaign {
                 name: _name,
                 beneficiary: _beneficiary,
@@ -112,17 +104,19 @@ mod Crowdfunding {
 
         fn contribute(ref self: ContractState, campaign_no: u64, amount: u256) {
             let mut campaign = self.campaigns.read(campaign_no);
+
+            assert(campaign.beneficiary != contract_address_const::<0>(), 'Campaign not found');
             assert(get_block_timestamp() < campaign.end_time, 'Campaign ended');
 
             campaign.amount += amount;
             campaign.numFunders += 1;
 
             let funder_addr = get_caller_address();
-            let funder_identifier: felt252 = self.get_funder_identifier(campaign_no, funder_addr);
-            let new_funder_amount = amount + self.get_funder_contribution(funder_identifier);
-            let funder = Funder { funder_addr: funder_addr, amount_funded: new_funder_amount };
+            let funder = self.get_funder_info(campaign_no, funder_addr);
+            let new_funder_amount = amount + funder.amount_funded;
+            let new_funder = Funder { funder_addr: funder_addr, amount_funded: new_funder_amount };
 
-            self.funder_no.write(funder_identifier, funder);
+            self.funder_contribution.write((campaign_no, funder_addr), new_funder);
             self.campaigns.write(campaign_no, campaign);
 
             IERC20Dispatcher { contract_address: campaign.token_addr }
@@ -145,49 +139,28 @@ mod Crowdfunding {
                 .transfer(campaign.beneficiary, campaign_amount);
         }
 
-        //Can only be called if the campaign ended and could not reach the goal
+        //Can only be called by users if the campaign ended and could not reach the goal
         fn withdraw_contribution(ref self: ContractState, campaign_no: u64) {
             let campaign = self.campaigns.read(campaign_no);
-            let funder_identifier = self.get_funder_identifier(campaign_no, get_caller_address());
-            let contribution_amount = self.get_funder_contribution(funder_identifier);
-
-            let mut funder = self.funder_no.read(funder_identifier);
+            let funder_addr = get_caller_address();
+            let mut funder = self.funder_contribution.read((campaign_no, funder_addr));
             let amount_funded = funder.amount_funded;
 
             assert(get_block_timestamp() > campaign.end_time, 'Campaign not ended');
             assert(campaign.amount < campaign.goal, 'Campaign reached goal');
-            assert(contribution_amount > 0, 'Not a funder');
+            assert(amount_funded > 0, 'Not a funder');
 
             funder.amount_funded = 0;
-            self.funder_no.write(funder_identifier, funder);
+            self.funder_contribution.write((campaign_no, funder_addr), funder);
 
             IERC20Dispatcher { contract_address: campaign.token_addr }
                 .transfer(funder.funder_addr, amount_funded);
         }
 
-        fn get_funder_identifier(
-            self: @ContractState, campaign_no: u64, funder_addr: ContractAddress
-        ) -> felt252 {
-            let identifier_hash = PoseidonTrait::new()
-                .update(campaign_no.into())
-                .update(funder_addr.into())
-                .finalize();
-
-            identifier_hash
-        }
-
-        fn get_funder_contribution(self: @ContractState, identifier_hash: felt252) -> u256 {
-            let funder = self.funder_no.read(identifier_hash);
-
-            funder.amount_funded
-        }
-
         fn get_funder_info(
             self: @ContractState, campaign_no: u64, funder_addr: ContractAddress
         ) -> Funder {
-            let identifier_hash = self.get_funder_identifier(campaign_no, funder_addr);
-
-            self.funder_no.read(identifier_hash)
+            self.funder_contribution.read((campaign_no, funder_addr))
         }
 
         fn get_campaign_info(self: @ContractState, campaign_no: u64) -> Campaign {
@@ -196,6 +169,10 @@ mod Crowdfunding {
 
         fn get_latest_campaign_no(self: @ContractState) -> u64 {
             self.campaign_no.read()
+        }
+
+        fn get_campaign_duration(self: @ContractState) -> u64 {
+            self.campaign_duration.read()
         }
     }
 }
